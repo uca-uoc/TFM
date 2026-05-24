@@ -19,7 +19,7 @@ Para ejecutar el análisis, sigue estos pasos:
 
 1. **Preparación del entorno:** Crea una carpeta llamada `DATA` en la raíz del repositorio.
 2. **Descarga de datos:** Obtén los archivos originales (`GSE268851_series_matrix.txt` y `GSE268851_TNBC_Study_RawCounts.txt`) desde [NCBI GEO (GSE268851)](https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE268851) y colócalos en la carpeta `DATA`.
-3. **Ejecución:** Abre `CODE/TFM_Memoria_Analisis.Rmd` en RStudio y asegúrate de tener instaladas las librerias y dependencias necesarias.
+3. **Ejecución:** Abre `CODE/MAIN.Rmd` en RStudio y asegúrate de tener instaladas las librerías y dependencias necesarias.
 
 ## ⚠️ Responsabilidad Clínica
 Este modelo constituye una herramienta de **apoyo a la decisión clínica** y no sustituye, bajo ninguna circunstancia, el diagnóstico médico profesional. La validación final de los biomarcadores identificados debe ser realizada por personal clínico cualificado.
