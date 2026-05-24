@@ -1,1 +1,604 @@
+---
+title: "TFM: Búsqueda de genes involucrados en el grado histológico de tumores de mama mediante técnicas de Machine Learning"
+author: "Oriol Castellano Aguilera"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    theme: flatly
+    code_folding: show
+---
 
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+```
+
+---
+
+# 1. Carga de Librerías
+
+```{r librerias}
+library(GEOquery)
+library(limma)
+library(Biobase)
+library(caret)
+library(randomForest)
+library(e1071)
+library(pROC)
+library(tidyverse)
+library(ggplot2)
+library(reshape2)
+library(knitr)
+library(kableExtra)
+
+# Directorio de trabajo
+# setwd("")
+```
+
+---
+
+# 2. Carga y Sincronización de Datos
+
+Los datos provienen del repositorio público GEO. Se cargan dos archivos:
+- **Series Matrix**: contiene los metadatos clínicos de las 253 pacientes.
+- **Raw Counts**: matriz de expresión génica con los conteos brutos de RNA-Seq.
+
+```{r carga_datos}
+path_data <- "../DATA/"
+
+# Metadatos clínicos (CAMBIAR "DATASET")
+gse <- getGEO(filename = paste0(path_data, "DATASET_series_matrix.txt"), getGPL = FALSE)
+metadata <- pData(gse)
+
+# Matriz de conteos brutos
+counts <- read.table(
+  paste0(path_data, "GSE268851_TNBC_Study_RawCounts.txt"),
+  header = TRUE,
+  row.names = 1,
+  sep = "\t",
+  check.names = FALSE
+)
+```
+
+## 2.1 Estandarización de muestras
+
+Los IDs en la matriz de conteos (ej. `TNBC0010`) y en los metadatos (ej. `TNBC_0010`) difieren
+en el guion bajo. Se estandarizan para poder cruzar ambas tablas.
+
+```{r sincronizacion}
+# Estandarizar IDs eliminando el guion bajo
+metadata$sample_id <- gsub("_", "", metadata$title)
+
+# Muestras comunes entre ambas fuentes
+common_samples <- intersect(colnames(counts), metadata$sample_id)
+
+# Filtrar y reordenar para que coincidan exactamente
+counts_final   <- counts[, common_samples]
+metadata_final <- metadata[match(common_samples, metadata$sample_id), ]
+
+# Crear variable de obesidad a partir del IMC (OMS: >= 30 = obeso)
+metadata_final$obesity <- ifelse(
+  as.numeric(metadata_final$`bmi:ch1`) >= 30, "Obese", "Non-Obese"
+)
+
+# Verificación
+print(paste("¿Sincronizados correctamente?:", 
+            all(colnames(counts_final) == metadata_final$sample_id)))
+print(paste("Número de muestras:", ncol(counts_final)))
+print(paste("Número de genes:", nrow(counts_final)))
+```
+
+---
+
+# 3. Preprocesamiento
+
+## 3.1 Filtrado de genes de baja expresión
+
+Se eliminan los genes con conteos muy bajos, que representan ruido técnico y no aportan
+información biológica relevante. Se aplica el criterio de al menos 10 conteos en el 50%
+de las muestras.
+
+```{r filtrado}
+keep <- rowSums(counts_final > 10) >= (ncol(counts_final) * 0.5)
+counts_clean <- counts_final[keep, ]
+
+print(paste("Genes antes del filtrado:", nrow(counts_final)))
+print(paste("Genes después del filtrado:", nrow(counts_clean)))
+```
+
+## 3.2 Normalización logarítmica
+
+La transformación log2(x+1) estabiliza la varianza y reduce el efecto de los genes
+altamente expresados sobre los análisis posteriores.
+
+```{r normalizacion}
+log_counts    <- log2(counts_clean + 1)
+scaled_counts <- t(scale(t(log_counts)))
+```
+
+---
+
+# 4. Análisis Exploratorio (EDA)
+
+## 4.1 Análisis de Componentes Principales (PCA)
+
+El PCA permite visualizar la estructura global de los datos y detectar posibles efectos
+de lote (batch effects) que podrían sesgar el análisis.
+
+```{r pca}
+# 1. Filtramos la matriz logarítmica para quedarnos SOLO con las muestras válidas (sin grado 9)
+# Primero declaramos metadata_clean para asegurar la coherencia en el flujo del PCA
+metadata_clean <- metadata_final %>%
+  filter(`grade:ch1` %in% c("1", "2", "3")) %>%
+  mutate(Target = ifelse(`grade:ch1` == "3", "High", "Low")) %>%
+  mutate(Target = as.factor(Target))
+
+counts_pca <- log_counts[, metadata_clean$sample_id]
+
+# 2. Seleccionamos los 1000 genes más variables sobre este subset limpio
+rv     <- apply(counts_pca, 1, var)
+select <- order(rv, decreasing = TRUE)[1:1000]
+pca_res <- prcomp(t(counts_pca[select, ]))
+
+# Porcentaje de varianza explicada
+var_exp <- round(summary(pca_res)$importance[2, 1:2] * 100, 1)
+
+# 3. Construimos el DataFrame para visualización utilizando 'metadata_clean'
+pca_df <- data.frame(
+  PC1     = pca_res$x[, 1],
+  PC2     = pca_res$x[, 2],
+  Grado   = metadata_clean$`grade:ch1`,
+  Raza    = metadata_clean$`race:ch1`,
+  Obesity = metadata_clean$obesity
+)
+```
+
+```{r pca_grado, fig.cap="PCA coloreado por Grado Histológico"}
+ggplot(pca_df, aes(PC1, PC2, color = Grado)) +
+  geom_point(size = 2.5, alpha = 0.8) +
+  theme_minimal(base_size = 12) +
+  scale_color_brewer(palette = "Set1") +
+  labs(
+  title    = "PCA de Expresión Génica",
+  subtitle = "Grado Histólogico",
+  x = paste0("PC1 (", var_exp[1], "%)"),
+       y = paste0("PC2 (", var_exp[2], "%)"))
+```
+
+```{r pca_raza, fig.cap="PCA coloreado por Raza"}
+ggplot(pca_df, aes(PC1, PC2, color = Raza)) +
+  geom_point(size = 2.5, alpha = 0.8) +
+  theme_minimal(base_size = 12) +
+  scale_color_manual(values = c("green", "pink")) +
+  labs(
+  title    = "PCA de Expresión Génica",
+  subtitle = "Raza",
+  x = paste0("PC1 (", var_exp[1], "%)"),
+       y = paste0("PC2 (", var_exp[2], "%)"))
+```
+
+```{r pca_obesidad, fig.cap="PCA coloreado por Obesidad"}
+ggplot(pca_df, aes(PC1, PC2, color = Obesity)) +
+  geom_point(size = 2.5, alpha = 0.8) +
+  theme_minimal(base_size = 12) +
+  scale_color_manual(values = c("yellow", "brown")) +
+  labs(
+    title    = "PCA de Expresión Génica",
+    subtitle = "Obesidad (IMC ≥ 30)",
+    x        = paste0("PC1 (", var_exp[1], "% varianza)"),
+    y        = paste0("PC2 (", var_exp[2], "% varianza)")
+  )
+```
+
+## 4.2 Test de efecto de lote por raza
+
+Se evalúa estadísticamente si la primera componente principal está correlacionada con la
+raza, lo que indicaría un posible sesgo sistemático en los datos.
+
+```{r batch_effect}
+# Sincronizamos el test estadístico utilizando la raza de 'metadata_clean'
+cor_test <- cor.test(
+  pca_res$x[, 1],
+  as.numeric(as.factor(metadata_clean$`race:ch1`))
+)
+print(cor_test)
+```
+---
+
+# 5. Preparación para Machine Learning
+
+## 5.1 Limpieza de la variable objetivo
+
+El dataset original incluye registros con grado "9" (valor desconocido), que se eliminan.
+Los grados 1 y 2 se agrupan como "Low" (bajo grado) y el grado 3 como "High" (alto grado),
+creando una clasificación binaria acorde con la relevancia clínica.
+
+```{r limpieza_grado}
+metadata_clean <- metadata_final %>%
+  filter(`grade:ch1` %in% c("1", "2", "3")) %>%
+  mutate(Target = ifelse(`grade:ch1` == "3", "High", "Low")) %>%
+  mutate(Target = as.factor(Target))
+
+counts_ml <- log_counts[, metadata_clean$sample_id]
+
+# Distribución de clases
+print(table(metadata_clean$Target))
+print(prop.table(table(metadata_clean$Target)))
+```
+
+## 5.2 División en entrenamiento y prueba
+```{r train_test_split}
+set.seed(123)
+
+# División
+index <- createDataPartition(
+  metadata_clean$Target,
+  p = 0.8,
+  list = FALSE
+)
+
+# Metadatos
+train_meta <- metadata_clean[index, ]
+test_meta  <- metadata_clean[-index, ]
+
+# Expresión génica
+train_counts <- counts_ml[, train_meta$sample_id]
+test_counts  <- counts_ml[, test_meta$sample_id]
+
+print(paste("Muestras entrenamiento:", ncol(train_counts)))
+print(paste("Muestras prueba:", ncol(test_counts)))
+```
+
+```{r feature_selection}
+
+# Diseño experimental SOLO con train
+design <- model.matrix(~0 + Target, data = train_meta)
+colnames(design) <- c("High", "Low")
+
+# limma SOLO sobre entrenamiento
+fit <- lmFit(train_counts, design)
+
+cont_matrix <- makeContrasts(
+  High - Low,
+  levels = design
+)
+
+fit2 <- contrasts.fit(fit, cont_matrix)
+fit2 <- eBayes(fit2)
+
+# Top 100 genes diferenciales
+top_genes <- topTable(fit2, n = 300)
+
+genes_final <- rownames(top_genes)
+
+# Visualizar top genes
+head(top_genes, 10)
+```
+
+```{r construir_datasets}
+
+# TRAIN
+train_data <- as.data.frame(
+  t(train_counts[genes_final, ])
+)
+
+train_data$Target <- train_meta$Target
+
+# TEST
+test_data <- as.data.frame(
+  t(test_counts[genes_final, ])
+)
+
+test_data$Target <- test_meta$Target
+
+print(dim(train_data))
+print(dim(test_data))
+```
+
+
+# 6. Modelos de Machine Learning
+
+La configuración de entrenamiento es común a ambos modelos: validación cruzada de 5
+pliegues y down-sampling para corregir el desbalance de clases.
+
+```{r control_entrenamiento}
+ctrl <- trainControl(
+  method       = "cv",
+  number       = 5,
+  sampling     = "down",
+  classProbs   = TRUE,
+  summaryFunction = twoClassSummary
+)
+```
+
+## 6.1 Modelo 1: Random Forest
+
+El Random Forest construye múltiples árboles de decisión y combina sus predicciones
+mediante votación. Es especialmente robusto en datos de alta dimensionalidad como los
+datos ómicos.
+
+```{r random_forest, cache=TRUE}
+set.seed(123)
+model_rf <- train(
+  Target ~ .,
+  data       = train_data,
+  method     = "rf",
+  metric     = "ROC",
+  trControl  = ctrl,
+  importance = TRUE
+)
+
+print(model_rf)
+```
+
+## 6.2 Modelo 2: Support Vector Machine (SVM)
+
+La SVM busca el hiperplano óptimo que separa las clases en un espacio de alta dimensión.
+Se utiliza un kernel radial, adecuado cuando el número de variables supera al número de
+muestras.
+
+```{r svm, cache=TRUE}
+set.seed(123)
+model_svm <- train(
+  Target ~ .,
+  data      = train_data,
+  method    = "svmRadial",   
+  metric    = "ROC",
+  trControl = ctrl,
+  tuneGrid  = data.frame(C = c(0.1, 1, 10), sigma = 0.01)
+)
+
+print(model_svm)
+```
+
+---
+
+# 7. Evaluación y Comparación de Modelos
+
+## 7.1 Comparación de rendimiento (Cross-Validation)
+
+```{r comparacion_modelos, fig.cap="Comparación de AUC entre Random Forest y SVM"}
+results <- resamples(list(RandomForest = model_rf, SVM = model_svm))
+summary(results)
+
+bwplot(results, metric = "ROC",
+       main = "Comparación de AUC: Random Forest vs SVM")
+```
+
+## 7.2 Evaluación en el conjunto de prueba
+
+### Random Forest
+
+```{r eval_rf}
+probs_rf <- predict(model_rf, test_data, type = "prob")
+
+roc_rf <- roc(test_data$Target, probs_rf$High, 
+              levels = c("Low", "High"), direction = "<")
+cat("\nAUC Random Forest:", round(auc(roc_rf), 3), "\n")
+
+# Predicción de clases RF
+pred_rf <- predict(model_rf, test_data)
+
+# Confusion Matrix RF
+cm_rf <- confusionMatrix(
+  pred_rf,
+  test_data$Target,
+  positive = "High"
+)
+
+cm_rf
+```
+
+### SVM
+
+```{r eval_svm}
+probs_svm <- predict(model_svm, test_data, type = "prob")
+roc_svm <- roc(test_data$Target, probs_svm$High, 
+               levels = c("Low", "High"), direction = "<")
+
+cat("\nAUC SVM:", round(auc(roc_svm), 3), "\n")
+
+# Predicción de clases SVM
+pred_svm <- predict(model_svm, test_data)
+
+# Confusion Matrix SVM
+cm_svm <- confusionMatrix(
+  pred_svm,
+  test_data$Target,
+  positive = "High"
+)
+
+cm_svm
+```
+
+
+```{r}
+# Para Random Forest
+probs_rf <- predict(model_rf, test_data, type = "prob")
+roc_rf <- roc(test_data$Target, probs_rf$High, 
+              levels = c("Low", "High"), 
+              direction = "<", 
+              smooth = TRUE) # Pruébalo primero en FALSE; si sigue raro, pon TRUE
+
+# Para SVM
+probs_svm <- predict(model_svm, test_data, type = "prob")
+roc_svm <- roc(test_data$Target, probs_svm$High, 
+               levels = c("Low", "High"), 
+               direction = "<",
+               smooth = TRUE)
+```
+
+## 7.3 Curvas ROC comparativas
+
+```{r curvas_roc, fig.cap="Curvas ROC: Random Forest vs SVM"}
+df_roc_rf <- data.frame(
+  FPR   = 1 - roc_rf$specificities,
+  TPR   = roc_rf$sensitivities,
+  Modelo = paste0("Random Forest (AUC=", round(auc(roc_rf), 3), ")")
+)
+
+df_roc_svm <- data.frame(
+  FPR   = 1 - roc_svm$specificities,
+  TPR   = roc_svm$sensitivities,
+  Modelo = paste0("SVM (AUC=", round(auc(roc_svm), 3), ")")
+)
+
+df_roc <- rbind(df_roc_rf, df_roc_svm)
+
+ggplot(df_roc, aes(x = FPR, y = TPR, color = Modelo)) +
+  geom_line(linewidth = 1.2) +
+  geom_abline(lty = 2, color = "grey50") +
+  scale_color_manual(values = c("#2ECC71", "#9B5DE5")) +
+  theme_minimal(base_size = 12) +
+  theme(
+    legend.position = "bottom",          # Mueve la leyenda abajo
+    legend.box.just = "center",          # Centra los elementos de la leyenda
+    plot.title = element_text(face = "bold", hjust = 0.5) # Centra y pone en negrita el título
+  ) +
+  labs(
+    title = "Curvas ROC: Comparación de Modelos",
+    x     = "1 - Especificidad (Tasa de Falsos Positivos)",
+    y     = "Sensibilidad (Tasa de Verdaderos Positivos)",
+    color = "Modelo:"                     # Título opcional para la leyenda
+  )
+```
+
+---
+
+# 8. Importancia de Variables y Biomarcadores
+
+## 8.1 Genes más predictivos (Random Forest)
+
+```{r importancia_genes, fig.cap="Top 15 genes con mayor importancia predictiva (Random Forest)"}
+plot(varImp(model_rf), top = 15,
+     main = "Importancia de Genes - Random Forest")
+
+plot(varImp(model_svm), top = 15,
+     main = "Importancia de Genes - SVM")
+```
+
+```{r importancia_genes}
+# --- Random Forest ---
+imp_rf <- varImp(model_rf)$importance
+imp_rf$Gene <- rownames(imp_rf)
+colnames(imp_rf)[1] <- "Importance"
+imp_rf_top <- imp_rf[order(imp_rf$Importance, decreasing = TRUE)[1:15], ]
+imp_rf_top$Gene <- factor(imp_rf_top$Gene, levels = imp_rf_top$Gene[order(imp_rf_top$Importance)])
+
+p_rf <- ggplot(imp_rf_top, aes(x = Gene, y = Importance, fill = Importance)) +
+  geom_bar(stat = "identity") +
+  coord_flip() +
+  scale_fill_gradient(low = "#A9DFBF", high = "#2ECC71") +
+  theme_minimal(base_size = 12) +
+  theme(legend.position = "none") +
+  labs(title = "Importancia de Genes - Random Forest",
+       x = NULL, y = "Importancia (%)")
+
+# --- SVM ---
+imp_svm <- varImp(model_svm)$importance
+imp_svm$Gene <- rownames(imp_svm)
+colnames(imp_svm)[1] <- "Importance"
+imp_svm_top <- imp_svm[order(imp_svm$Importance, decreasing = TRUE)[1:15], ]
+imp_svm_top$Gene <- factor(imp_svm_top$Gene, levels = imp_svm_top$Gene[order(imp_svm_top$Importance)])
+
+p_svm <- ggplot(imp_svm_top, aes(x = Gene, y = Importance, fill = Importance)) +
+  geom_bar(stat = "identity") +
+  coord_flip() +
+  scale_fill_gradient(low = "#EADCF8", high = "#9B5DE5") +
+  theme_minimal(base_size = 12) +
+  theme(legend.position = "none") +
+  labs(title = "Importancia de Genes - SVM",
+       x = NULL, y = "Importancia (%)")
+
+print(p_rf)
+print(p_svm)
+```
+
+```{r}
+# --- IMPRESIÓN EN MODO LISTA ---
+cat("\n==================================================\n")
+cat("      LISTA: TOP 15 VARIABLES - RANDOM FOREST\n")
+cat("==================================================\n")
+for(i in 1:nrow(imp_rf_top)) {
+  cat(paste0(i, ". ", imp_rf_top$Gene[nrow(imp_rf_top) - i + 1], 
+             " (Importancia: ", round(imp_rf_top$Importance[nrow(imp_rf_top) - i + 1], 2), ")\n"))
+}
+
+cat("\n==================================================\n")
+cat("          LISTA: TOP 15 VARIABLES - SVM\n")
+cat("==================================================\n")
+for(i in 1:nrow(imp_svm_top)) {
+  cat(paste0(i, ". ", imp_svm_top$Gene[nrow(imp_svm_top) - i + 1], 
+             " (Importancia: ", round(imp_svm_top$Importance[nrow(imp_svm_top) - i + 1], 2), ")\n"))
+}
+```
+
+## 8.2 Validación visual del biomarcador principal
+
+Se visualiza la diferencia de expresión del gen con mayor importancia predictiva entre los grupos de alto y bajo grado histológico.
+
+```{r boxplot_gen_top, fig.cap="Expresión diferencial del biomarcador principal según el grado histológico"}
+gene_top <- rownames(varImp(model_rf)$importance)[
+  which.max(varImp(model_rf)$importance[, 1])
+]
+
+df_boxplot <- data.frame(
+  Expresion = as.numeric(log_counts[gene_top, metadata_clean$sample_id]),
+  Grado     = as.factor(metadata_clean$Target)
+)
+
+ggplot(df_boxplot, aes(x = Grado, y = Expresion, fill = Grado)) +
+  geom_boxplot(outlier.color = "darkred", alpha = 0.7) +
+  geom_jitter(width = 0.2, alpha = 0.25) +
+  scale_fill_manual(values = c("High" = "red", "Low" = "blue")) +
+  theme_minimal(base_size = 12) +
+  labs(
+    title    = paste("Expresión diferencial del biomarcador:", gene_top),
+    subtitle = "Comparación entre tumores de alto y bajo grado histológico",
+    y        = "Nivel de expresión (Log2)",
+    x        = "Grupo"
+  )
+```
+```{r}
+# 1. Forzamos el gen CHL1 (Top 1 SVM en tus resultados)
+gene_svm <- "CHL1" 
+
+df_chl1 <- data.frame(
+  Expresion = as.numeric(log_counts[gene_svm, metadata_clean$sample_id]),
+  Grado     = as.factor(metadata_clean$Target)
+)
+
+ggplot(df_chl1, aes(x = Grado, y = Expresion, fill = Grado)) +
+  geom_boxplot(outlier.color = "darkred", alpha = 0.7) +
+  geom_jitter(width = 0.2, alpha = 0.25) +
+  scale_fill_manual(values = c("High" = "red", "Low" = "blue")) +
+  theme_minimal(base_size = 14) +
+  labs(
+    title    = paste("Biomarcador Principal SVM:", gene_svm),
+    subtitle = "Reducción de expresión asociada a alta agresividad (High Grade)",
+    y        = "Nivel de expresión (Log2)",
+    x        = "Grado Histológico"
+  )
+```
+
+---
+
+# 9. Resumen de Resultados
+```{r resumen_final_limpio}
+# Crear un data frame ordenado
+resultados_df <- data.frame(
+  Métrica = c("Accuracy", "Kappa", "Sensibilidad", "Especificidad", "AUC"),
+  RandomForest = c(round(cm_rf$overall["Accuracy"], 4), round(cm_rf$overall["Kappa"], 4), 
+                   round(cm_rf$byClass["Sensitivity"], 4), round(cm_rf$byClass["Specificity"], 4), 
+                   round(auc(roc_rf), 4)),
+  SVM = c(round(cm_svm$overall["Accuracy"], 4), round(cm_svm$overall["Kappa"], 4), 
+          round(cm_svm$byClass["Sensitivity"], 4), round(cm_svm$byClass["Specificity"], 4), 
+          round(auc(roc_svm), 4))
+)
+
+# Renderizar tabla elegante
+kable(resultados_df, caption = "Comparativa de Métricas de Rendimiento") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"), full_width = F) %>%
+  row_spec(0, bold = T, color = "white", background = "#2c3e50")
+```
