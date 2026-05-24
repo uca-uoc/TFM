@@ -8,7 +8,7 @@
 ## 📖 Descripción
 Este repositorio contiene el código fuente desarrollado para el Trabajo Final de Máster (TFM) del **Máster Universitario en Ciencia de Datos de la UOC**. 
 
-El proyecto implementa un pipeline bioinformático completo para el análisis de expresión génica (RNA-Seq) en cáncer de mama. A través de técnicas de aprendizaje automático (**Random Forest** y **SVM**), se ha desarrollado un modelo capaz de clasificar el grado histológico tumoral, facilitando la identificación de biomarcadores génicos con relevancia clínica.
+El proyecto implementa un pipeline bioinformático completo para el análisis de expresión génica (RNA-Seq) en cáncer de mama. A través de técnicas de aprendizaje automático, se ha desarrollado un modelo capaz de clasificar el grado histológico tumoral, facilitando la identificación de biomarcadores génicos con relevancia clínica.
 
 ## 📂 Estructura del Repositorio
 * `CODE/`: Contiene el rMarkdown con el flujo completo de análisis, desde el preprocesamiento de datos hasta la evaluación de modelos.
