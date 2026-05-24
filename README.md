@@ -8,7 +8,7 @@ En este trabajo final de máster se ha desarrollado un pipeline bioinformático 
 | `.gitignore` | Configuración para excluir archivos locales, datos sensibles y resultados temporales. |
 | `LICENSE` | Términos de la licencia de uso (Creative Commons CC BY-NC-ND 3.0 ES). |
 | `/CODE` | Script principal en formato RMarkdown (`TFM_Memoria_Analisis.Rmd`) con el flujo completo de preprocesamiento y modelado. |
-| `/DATA` | Directorio vacío para alojar localmente los archivos fuente de GEO (GSE268851). |
+| `/DATA` | Directorio vacío para alojar localmente los archivos fuente. |
 
 ## ⚠️ Responsabilidad Clínica
 El modelo desarrollado en esta memoria actúa como una herramienta de apoyo a la decisión clínica y no pretende sustituir el diagnóstico del patólogo. La interpretabilidad de los algoritmos utilizados asegura que la responsabilidad final y la validación de los biomarcadores permanezcan en manos de profesionales sanitarios.
