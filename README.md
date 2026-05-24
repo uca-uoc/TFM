@@ -1,4 +1,4 @@
-# Búsqueda de genes involucrados en el grado histológico de tumores de mama mediante tecnicas de Machine Learning
+# Búsqueda de genes involucrados en el grado histológico de tumores de mama mediante técnicas de Machine Learning
 
 [![Language: R](https://img.shields.io/badge/Language-R-blue.svg)](https://www.r-project.org/)
 [![License: CC BY-NC-ND 3.0 ES](https://img.shields.io/badge/License-CC_BY--NC--ND_3.0_ES-lightgrey.svg)](https://creativecommons.org/licenses/by-nc-nd/3.0/deed.es)
