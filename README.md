@@ -1,4 +1,4 @@
-Búsqueda de genes involucrados en el grado histológico de tumores de mama mediante técnicas de Machine Learning
+# Búsqueda de genes involucrados en el grado histológico de tumores de mama mediante técnicas de Machine Learning
 
 En este trabajo final de máster se ha desarrollado un pipeline bioinformático para analizar datos de expresión génica y entrenar modelos de Machine Learning (Random Forest y SVM) capaces de clasificar el grado histológico en cáncer de mama, actuando como una herramienta de apoyo a la decisión clínica.
 
