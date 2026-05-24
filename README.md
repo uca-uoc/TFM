@@ -16,7 +16,4 @@ El modelo desarrollado en esta memoria actúa como una herramienta de apoyo a la
 ## ⚖️ Licencia
 Esta obra está sujeta a la licencia [Creative Commons Attribution-NonCommercial-NoDerivs 3.0 Spain](https://creativecommons.org/licenses/by-nc-nd/3.0/deed.es).
 
-## 👤 Autor
-| Usuario de GitHub | Nombre |
-| :--- | :--- |
-| [TuUsuario] | Oriol Castellano Aguilera |
+Oriol Castellano Aguilera 
