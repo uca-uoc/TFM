@@ -44,6 +44,7 @@ Los datos provienen del repositorio público GEO. Se cargan dos archivos:
 - **Series Matrix**: contiene los metadatos clínicos de las 253 pacientes.
 - **Raw Counts**: matriz de expresión génica con los conteos brutos de RNA-Seq.
 
+*ASEGÚRATE DE ACTUALIZAR LA(s) VARIABLE(s) 'path_data', 'setwd' ...*
 ```{r carga_datos}
 path_data <- "../DATA/"
 
